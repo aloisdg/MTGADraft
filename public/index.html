@@ -178,8 +178,20 @@
 				<small v-if="!drafting">(Draft will begin when the session has at least 2 players and everybody is ready.)</small>
 				<small v-if="drafting && bots > 0">(...and {{bots}} bad bot(s)!)</small>
 			</div>
-			<div class="chat">
+			<div class="endDraftControls">
 				<button @click="displayDraftLog = !displayDraftLog" v-show="draftLog">Draft Log</button>
+				<a class="button" target="_blank" rel="noopener noreferrer" v-if="tournamentInfos && tournamentInfos['full_challonge_url']" :href="tournamentInfos['full_challonge_url']" >See Tournament <i class="fas fa-external-link-alt"></i></a>
+				<template v-if="userID == sessionOwner && (!tournamentInfos || !tournamentInfos['started_at'])">
+					<button @click="startTournament" v-if="tournamentInfos && !tournamentInfos['started_at']">Start Tournament</button>
+					<template v-if="tournamentInfos !== 'loading'">
+						<button @click="generateTournament">{{tournamentInfos ? "Reset Tournament" : "Generate Tournament"}}</button>
+					</template>
+					<template v-else>
+						<button class="disabled"><i class="fas fa-spinner fa-spin"></i></button>
+					</template>
+				</template>
+			</div>
+			<div class="chat">
 				<button @click="displayChatHistory = !displayChatHistory">Chat History</button>
 				<form @submit.prevent="sendChatMessage">
 					<input type="text" v-model="currentChatMessage" placeholder="Chat with players in your session."  maxlength="255" />

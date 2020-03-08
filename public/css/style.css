@@ -54,6 +54,7 @@ a:hover {
 #main-vue input[type="button"], 
 #main-vue input[type="number"], 
 #main-vue button, 
+#main-vue .button, 
 .check-button + label 
 {
 	color: #DDD;

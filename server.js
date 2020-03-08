@@ -1,6 +1,7 @@
 "use strict";
 
 const port = process.env.PORT || 3000
+const request = require('request')
 const compression = require('compression');
 const express = require('express'); 
 const app = express();
@@ -11,6 +12,7 @@ const uuidv1 = require('uuid/v1');
 const fs = require('fs');
 
 const MTGSets = ["m19", "xln", "rix", "dom", "grn", "rna", "war", "m20", "eld", "thb"];
+const ChallongeAPIKey = "zoqcCwgKOYiQyZBxxYVcGCALyXJgFn8BJvSGMQ34";
 
 app.use(compression());
 app.use(cookieParser()); 
@@ -92,6 +94,7 @@ function Session(id, owner) {
 	this.round = 0;
 	this.pickedCardsThisRound = 0; 
 	this.disconnectedUsers = {};
+	this.tournamentInfos = undefined;
 	
 	this.countdown = 60;
 	this.maxTimer = 60;
@@ -137,7 +140,134 @@ function Session(id, owner) {
 
 	this.getTotalVirtualPlayers = function() {
 		return this.users.size + Object.keys(this.disconnectedUsers).length + this.bots
-	}
+	};
+	
+	this.generateTournament = function() {
+		if(this.tournamentInfos) {
+			this.resetTournamentPlayers();
+		} else {
+			const trimedUserName = Connections[this.owner].userName.length > 50 ? Connections[this.owner].userName.substring(0, 50) : Connections[this.owner].userName;
+			const name = `${encodeURI(trimedUserName)}_Draft`;
+			const url = `MTGADraft_${encodeURI(this.id)}`;
+			let self = this;
+			request.post('https://api.challonge.com/v1/tournaments.json', {
+				json: {
+					api_key: ChallongeAPIKey,
+					name: name,
+					url: url,
+					open_signup: true
+				}
+			}, (error, res, body) => {
+				console.log(`Create Tournament StatusCode: ${res.statusCode}`);
+				if(res.statusCode != 200) {
+					if (error) {
+						console.error(error);
+						return;
+					}
+					// "URL is already taken"
+					if(res.statusCode === 422 /* && error.errors && error.errors.includes('URL is already taken') */) {
+						request.get(`https://api.challonge.com/v1/tournaments/${url}.json?api_key=${ChallongeAPIKey}`,
+						(error, res, body) => {
+							console.log(`Get Tournament StatusCode: ${res.statusCode}`);
+							if (error)
+								console.error(error);
+							if(res.statusCode === 200) {
+								self.setTournamentInfos(JSON.parse(body)['tournament']);
+								self.resetTournamentPlayers();
+								self.updateTournamentInfos();
+							}
+						});
+					}
+				} else {
+					console.log(body);
+					self.setTournamentInfos(body['tournament']);
+					self.addPlayersToTournament();
+					self.updateTournamentInfos();
+				}
+			});
+		}
+	};
+	
+	this.addPlayersToTournament = function() {
+		let participants = [];
+		for(let user of this.users)
+			participants.push({name: `${Connections[user].userName} (${Connections[user].userID})`});
+		
+		console.log(participants);
+		
+		request.post(`https://api.challonge.com/v1/tournaments/${this.tournamentInfos['url']}/participants/bulk_add.json`, {
+			json: {
+				api_key: ChallongeAPIKey,
+				participants: participants
+			}
+		},  (error, res, body) => {
+			console.log(`AddBulk Players StatusCode: ${res.statusCode}`);
+			if (error)
+				console.error(error);
+		});
+	};
+	
+	this.setTournamentInfos = function(tournamentInfos) {
+		this.tournamentInfos = tournamentInfos;
+		for(let user of this.users)
+			Connections[user].socket.emit('tournamentInfos', tournamentInfos);
+	};
+	
+	this.resetTournamentPlayers = function() {
+		if(!this.tournamentInfos)
+			return;
+		
+		let self = this;
+		// Resets Tournament Players
+		request.del(`https://api.challonge.com/v1/tournaments/${this.tournamentInfos['url']}/participants/clear.json`, {
+				json: {
+					api_key: ChallongeAPIKey
+				}
+			},
+			(error, res, body) => {
+				console.log(`Delete Players StatusCode: ${res.statusCode}`);
+				if (error)
+					console.error(error);
+				else
+					self.addPlayersToTournament();
+			}
+		);
+	};
+	
+	// Get and share latest tournament state
+	this.updateTournamentInfos = function() {
+		if(!this.tournamentInfos)
+			return;
+		
+		let self = this;
+		request.get(`https://api.challonge.com/v1/tournaments/${this.tournamentInfos['url']}.json?api_key=${ChallongeAPIKey}`,
+		(error, res, body) => {
+			console.log(`Get Tournament StatusCode: ${res.statusCode}`);
+			if (error)
+				console.error(error);
+			if(res.statusCode === 200) {
+				self.setTournamentInfos(JSON.parse(body)['tournament']);
+			}
+		});
+	};
+	
+	this.startTournament = function() {
+		if(!this.tournamentInfos)
+			return;
+		
+		let self = this;
+		request.post(`https://api.challonge.com/v1/tournaments/${this.tournamentInfos['url']}/start.json`, {
+			json: {
+				api_key: ChallongeAPIKey
+			}
+		}, (error, res, body) => {
+			if (error)
+				console.error(error);
+			else {
+				self.updateTournamentInfos();
+			}
+		});
+	};
 }
 
 let Sessions = {};
@@ -462,6 +592,16 @@ io.on('connection', function(socket) {
 			return;
 		Sessions[sessionID].maxTimer = timerValue;
 	});
+	
+	socket.on('generateTournament', function() {
+		let sessionID = Connections[this.userID].sessionID;
+		Sessions[sessionID].generateTournament();
+	});
+	
+	socket.on('startTournament', function() {
+		let sessionID = Connections[this.userID].sessionID;
+		Sessions[sessionID].startTournament();
+	});
 });
 
 function generateBoosters(sessionID, boosterQuantity) {
@@ -566,6 +706,7 @@ function syncSessionOptions(userID) {
 	Connections[userID].socket.emit('bots', Sessions[sessionID].bots);
 	Connections[userID].socket.emit('isPublic', Sessions[sessionID].isPublic);
 	Connections[userID].socket.emit('sessionOwner', Sessions[sessionID].owner);
+	Connections[userID].socket.emit('tournamentInfos', Sessions[sessionID].tournamentInfos);
 }
 
 // Concept only :)

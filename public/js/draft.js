@@ -106,6 +106,7 @@ var app = new Vue({
 		maxTimer: 60,
 		pickTimer: 60,
 		draftLog: undefined,
+		tournamentInfos: undefined,
 		
 		sealedBoosterPerPlayer: 6,
 		
@@ -387,6 +388,10 @@ var app = new Vue({
 				app.draftLog = draftLog;
 			});
 			
+			this.socket.on('tournamentInfos', function(tournamentInfos) {
+				app.tournamentInfos = tournamentInfos;
+			});
+			
 			this.socket.on('setCardSelection', function(data) {
 				app.deck = [];
 				app.cardSelection = [];
@@ -601,6 +606,17 @@ var app = new Vue({
 		},
 		joinPublicSession: function() {
 			this.sessionID = this.selectedPublicSession;
+		},
+		generateTournament: function() {
+			if(this.userID != this.sessionOwner)
+				return;
+			this.tournamentInfos = "loading";
+			this.socket.emit('generateTournament');
+		},
+		startTournament: function() {
+			if(this.userID != this.sessionOwner)
+				return;
+			this.socket.emit('startTournament');
 		}
 	},
 	computed: {
